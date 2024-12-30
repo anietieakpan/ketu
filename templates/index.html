@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>License Plate Detection</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        #video-container,
+        #image-container {
+            max-width: 100%;
+            margin: 20px auto;
+            border: 2px solid #333;
+        }
+
+        .controls {
+            margin: 20px 0;
+        }
+
+        button {
+            padding: 10px 20px;
+            margin: 0 10px;
+            font-size: 16px;
+        }
+
+        #plates-list {
+            margin-top: 20px;
+            text-align: left;
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+        }
+
+        #image-upload,
+        #video-upload {
+            margin: 20px 0;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>License Plate Detection</h1>
+
+    <div id="video-upload">
+        <h2>Upload Video</h2>
+        <input type="file" id="video-input" accept="video/*">
+        <button onclick="uploadVideo()">Upload Video</button>
+    </div>
+
+    <div class="controls">
+        <button onclick="startVideo()">Start Video</button>
+        <button onclick="stopVideo()">Stop Video</button>
+        <button onclick="refreshPlates()">Refresh Detected Plates</button>
+    </div>
+
+    <div id="video-container">
+        <img id="video-feed" src="" alt="Video Stream">
+    </div>
+
+    <div id="image-upload">
+        <h2>Upload Image</h2>
+        <input type="file" id="image-input" accept="image/*">
+        <button onclick="processImage()">Process Image</button>
+    </div>
+
+    <div id="image-container">
+        <img id="processed-image" src="" alt="Processed Image">
+    </div>
+
+    <div id="plates-list">
+        <h2>Detected Plates</h2>
+        <ul id="plates-ul"></ul>
+    </div>
+
+    <!-- <script> -->
+
+    <script>
+            const videoFeed = document.getElementById('video-feed');
+            const platesUl = document.getElementById('plates-ul');
+            let currentVideoPath = '';
+
+            function uploadVideo() {
+            const input = document.getElementById('video-input');
+            const file = input.files[0];
+            if (!file) {
+                alert('Please select a video file');
+            return;
+            }
+
+            // Check file size (100 MB limit)
+            const maxSize = 100 * 1024 * 1024; // 100 MB in bytes
+            if (file.size > maxSize) {
+                alert('File is too large. Please select a file smaller than 100 MB.');
+            return;
+            }
+
+            const formData = new FormData();
+            formData.append('video', file);
+
+            fetch('/upload_video', {
+                method: 'POST',
+            body: formData
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+            return response.json();
+            })
+            .then(data => {
+                if (data.error) {
+                alert('Error: ' + data.error);
+            return;
+                }
+            currentVideoPath = data.filepath;
+            alert('Video uploaded successfully. You can now start the video.');
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            alert('An error occurred while uploading the video. Please try again.');
+            });
+        }
+
+            function startVideo() {
+            if (!currentVideoPath) {
+                alert('Please upload a video first');
+            return;
+            }
+
+            fetch('/start_video', {
+                method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                },
+            body: JSON.stringify({videoPath: currentVideoPath})
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                alert('Error: ' + data.error);
+            return;
+                }
+            videoFeed.src = '/video_feed';
+            })
+            .catch(error => console.error('Error:', error));
+        }
+
+            function stopVideo() {
+                fetch('/stop_video')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.error) {
+                            alert('Error: ' + data.error);
+                            return;
+                        }
+                        videoFeed.src = '';
+                    })
+                    .catch(error => console.error('Error:', error));
+        }
+
+            function refreshPlates() {
+                fetch('/detected_plates')
+                    .then(response => response.json())
+                    .then(plates => {
+                        platesUl.innerHTML = '';
+                        plates.forEach(plate => {
+                            const li = document.createElement('li');
+                            li.textContent = `Plate: ${plate.text} (Confidence: ${plate.confidence.toFixed(2)})`;
+                            platesUl.appendChild(li);
+                        });
+                    })
+                    .catch(error => console.error('Error:', error));
+        }
+
+            function processImage() {
+            const input = document.getElementById('image-input');
+            const file = input.files[0];
+            if (!file) {
+                alert('Please select an image file');
+            return;
+            }
+
+            const formData = new FormData();
+            formData.append('image', file);
+
+            fetch('/process_image', {
+                method: 'POST',
+            body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                alert('Error: ' + data.error);
+            return;
+                }
+
+            const img = document.getElementById('processed-image');
+            img.src = 'data:image/jpeg;base64,' + data.image;
+
+            platesUl.innerHTML = '';
+                data.detections.forEach(plate => {
+                    const li = document.createElement('li');
+            li.textContent = `Plate: ${plate.text} (Confidence: ${plate.confidence.toFixed(2)})`;
+            platesUl.appendChild(li);
+                });
+            })
+            .catch(error => console.error('Error:', error));
+        }
+
+            // Automatically refresh plates every 5 seconds
+            setInterval(refreshPlates, 5000);
+    </script>
+    </body>
+    
+    </html>
