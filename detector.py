@@ -9,6 +9,8 @@ import os
 import base64
 import traceback
 
+from picamera2 import Picamera2
+
 warnings.filterwarnings('ignore', category=UserWarning, message='Implicit dimension choice for softmax.*')
 warnings.filterwarnings('ignore', category=UserWarning, message='Creating a tensor from a list of numpy.ndarrays is extremely slow.*')
 
@@ -190,3 +192,74 @@ class LicensePlateDetector:
 
     def get_detected_plates(self):
         return self.detected_plates
+    
+    
+    # def start_camera_capture(self):
+        
+    #     self.detected_plates = []
+    #     self.picam2 = Picamera2()
+    #     self.picam2.configure(self.picam2.create_preview_configuration(main={"format": 'XRGB8888', "size": (640, 480)}))
+    #     self.picam2.start()
+    #     self.is_processing = True
+    #     print("Started camera capture")
+    #     return self
+
+    def start_camera_capture(self):
+        if hasattr(self, 'picam2') and self.picam2 is not None:
+            print("Camera already initialized, stopping previous instance")
+            self.stop_camera_capture()
+    
+        try:
+            self.detected_plates = []
+            self.picam2 = Picamera2()
+            print("Picamera2 instance created")
+            self.picam2.configure(self.picam2.create_preview_configuration(main={"format": 'XRGB8888', "size": (640, 480)}))
+            print("Camera configured")
+            self.picam2.start()
+            print("Camera started")
+            self.is_processing = True
+            print("Camera capture started successfully")
+            return self
+        except Exception as e:
+            print(f"Error in start_camera_capture: {str(e)}")
+            self.picam2 = None
+            raise
+
+    def get_camera_frame(self):
+        if not self.is_processing:
+            return None
+    
+        frame = self.picam2.capture_array()
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
+    
+        processed_frame, detections = self.process_frame(frame)
+    
+        if detections:
+            for det in detections:
+                if not any(existing['text'] == det['text'] for existing in self.detected_plates):
+                    self.detected_plates.append(det)
+    
+        ret, jpeg = cv2.imencode('.jpg', processed_frame)
+        return jpeg.tobytes()
+
+    # def stop_camera_capture(self):
+    #     if hasattr(self, 'picam2'):
+    #         self.picam2.stop()
+    #     self.is_processing = False
+        
+    def stop_camera_capture(self):
+        if hasattr(self, 'picam2'):
+            try:
+                self.picam2.stop()
+                self.picam2.close()
+            except Exception as e:
+                print(f"Error stopping camera: {str(e)}")
+        self.is_processing = False
+        self.picam2 = None  # Ensure the picam2 attribute is cleared
+        
+    
+    # def is_camera_active(self):
+    #     return hasattr(self, 'picam2') and self.picam2 is not None and self.is_processing
+
+        
+        

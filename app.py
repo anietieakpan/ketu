@@ -6,6 +6,7 @@ import traceback
 import os
 from werkzeug.utils import secure_filename
 
+
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB limit
@@ -102,5 +103,36 @@ def process_image():
             traceback.print_exc()
             return jsonify({'error': f'Error processing image: {str(e)}'}), 500
 
+            
+@app.route('/start_camera')
+def start_camera():
+    try:
+        detector.start_camera_capture()
+        return jsonify({'success': 'Camera started'})
+    except Exception as e:
+        return jsonify({'error': f'Error starting camera: {str(e)}'}), 500
+
+@app.route('/stop_camera')
+def stop_camera():
+    detector.stop_camera_capture()
+    return jsonify({'success': 'Camera stopped'})
+
+@app.route('/camera_feed')
+def camera_feed():
+    def generate():
+        while detector.is_processing:
+            frame = detector.get_camera_frame()
+            if frame is None:
+                break
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+
+# @app.route('/camera_status')
+# def camera_status():
+#     return jsonify({'is_active': detector.is_camera_active()})
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
+

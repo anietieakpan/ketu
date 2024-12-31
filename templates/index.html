@@ -61,6 +61,16 @@
         <button onclick="refreshPlates()">Refresh Detected Plates</button>
     </div>
 
+    <!-- for camera feed - aniix 31 December -->
+    <div class="controls">
+        <button onclick="startCamera()">Start Camera</button>
+        <button onclick="stopCamera()">Stop Camera</button>
+    </div>
+
+
+
+
+
     <div id="video-container">
         <img id="video-feed" src="" alt="Video Stream">
     </div>
@@ -217,6 +227,36 @@
 
             // Automatically refresh plates every 5 seconds
             setInterval(refreshPlates, 5000);
+
+
+
+            // for camera capture - aniix 31 dec
+            function startCamera() {
+                    fetch('/start_camera')
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.error) {
+                                alert('Error: ' + data.error);
+                                return;
+                            }
+                            videoFeed.src = '/camera_feed';
+                        })
+                        .catch(error => console.error('Error:', error));
+                }
+
+            function stopCamera() {
+                    fetch('/stop_camera')
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.error) {
+                                alert('Error: ' + data.error);
+                                return;
+                            }
+                            videoFeed.src = '';
+                        })
+                        .catch(error => console.error('Error:', error));
+                }
+
     </script>
     </body>
     
