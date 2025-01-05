@@ -116,14 +116,77 @@ class LicensePlateDetector:
         
         
         
+    # def process_frame(self, frame, frame_size=None):
+    #     try:
+    #         if frame_size:
+    #             frame = cv2.resize(frame, frame_size)
+        
+    #         temp_frame_path = str(self.temp_dir / "temp_frame.jpg")
+    #         cv2.imwrite(temp_frame_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        
+    #         results = self.detector([temp_frame_path])
+    #         (images, bboxs, points, zones,
+    #         region_ids, region_names,
+    #         count_lines, confidences, texts) = unzip(results)
+
+    #         visualization = frame.copy()
+    #         detections = []
+
+    #         if bboxs and len(bboxs[0]) > 0:
+    #             for i, bbox in enumerate(bboxs[0]):
+    #                 x1, y1, x2, y2 = map(int, bbox[:4])
+    #                 det_confidence = float(bbox[4])
+
+    #                 cv2.rectangle(visualization, (x1, y1), (x2, y2), (0, 255, 0), 3)
+
+    #                 if texts and len(texts[0]) > i:
+    #                     text = texts[0][i]
+    #                     if isinstance(text, list):
+    #                         text = ' '.join(text)
+                    
+    #                     detection_info = {
+    #                         'text': text,
+    #                         'confidence': det_confidence,
+    #                         'bbox': (x1, y1, x2, y2)
+    #                     }
+    #                     detections.append(detection_info)
+
+    #                     label = f"{text} ({det_confidence:.2f})"
+    #                     text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)[0]
+
+    #                     cv2.rectangle(visualization,
+    #                             (x1, y1 - text_size[1] - 10),
+    #                             (x1 + text_size[0], y1),
+    #                             (0, 255, 0),
+    #                             -1)
+                    
+    #                     cv2.putText(visualization,
+    #                           label,
+    #                           (x1, y1 - 10),
+    #                           cv2.FONT_HERSHEY_SIMPLEX,
+    #                           1.0,
+    #                           (0, 0, 0),
+    #                           2)
+
+    #         return visualization, detections
+
+    #     except Exception as e:
+    #         print(f"Error in process_frame: {str(e)}")
+    #         traceback.print_exc()
+    #         return frame.copy(), []
+        
+        
+    
     def process_frame(self, frame, frame_size=None):
         try:
             if frame_size:
                 frame = cv2.resize(frame, frame_size)
-        
+            else:
+                frame = cv2.resize(frame, (self.resize_width, self.resize_height))
+
             temp_frame_path = str(self.temp_dir / "temp_frame.jpg")
             cv2.imwrite(temp_frame_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        
+
             results = self.detector([temp_frame_path])
             (images, bboxs, points, zones,
             region_ids, region_names,
@@ -133,9 +196,12 @@ class LicensePlateDetector:
             detections = []
 
             if bboxs and len(bboxs[0]) > 0:
-                for i, bbox in enumerate(bboxs[0]):
+                for i, bbox in enumerate(bboxs[0][:self.max_detections_per_frame]):
                     x1, y1, x2, y2 = map(int, bbox[:4])
                     det_confidence = float(bbox[4])
+
+                    if det_confidence < self.confidence_threshold:
+                        continue
 
                     cv2.rectangle(visualization, (x1, y1), (x2, y2), (0, 255, 0), 3)
 
@@ -143,7 +209,7 @@ class LicensePlateDetector:
                         text = texts[0][i]
                         if isinstance(text, list):
                             text = ' '.join(text)
-                    
+
                         detection_info = {
                             'text': text,
                             'confidence': det_confidence,
@@ -153,20 +219,19 @@ class LicensePlateDetector:
 
                         label = f"{text} ({det_confidence:.2f})"
                         text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)[0]
-
                         cv2.rectangle(visualization,
-                                (x1, y1 - text_size[1] - 10),
-                                (x1 + text_size[0], y1),
-                                (0, 255, 0),
-                                -1)
-                    
+                                    (x1, y1 - text_size[1] - 10),
+                                    (x1 + text_size[0], y1),
+                                    (0, 255, 0),
+                                    -1)
+
                         cv2.putText(visualization,
-                              label,
-                              (x1, y1 - 10),
-                              cv2.FONT_HERSHEY_SIMPLEX,
-                              1.0,
-                              (0, 0, 0),
-                              2)
+                                label,
+                                (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                1.0,
+                                (0, 0, 0),
+                                2)
 
             return visualization, detections
 
@@ -326,33 +391,6 @@ class LicensePlateDetector:
             raise
         
         
-    # def get_camera_frame(self):
-    #     if not self.is_processing:
-    #         return None
-    
-    #     frame = self.picam2.capture_array()
-    #     frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
-    
-    #     self.frame_count += 1
-    #     current_time = time.time()
-        
-    #     processed_frame = frame
-    #     detections = []
-
-    #     if (self.frame_count % self.frame_skip == 0 and
-    #         current_time - self.last_process_time >= self.process_every_n_seconds):
-    #         self.last_process_time = current_time
-    #         processed_frame, detections = self.process_frame(frame)
-        
-    #     if detections:
-    #         for det in detections:
-    #             if not any(existing['text'] == det['text'] for existing in self.detected_plates):
-    #                 self.detected_plates.append(det)
-    #     else:
-    #         processed_frame = frame
-    
-    #     ret, jpeg = cv2.imencode('.jpg', processed_frame)
-    #     return jpeg.tobytes()
 
 
     def get_camera_frame(self):

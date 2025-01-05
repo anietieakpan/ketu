@@ -158,15 +158,6 @@ def get_config():
 
 
 
-# def generate():
-#     with current_app.app_context():
-#         while detector.is_processing:
-#             frame = detector.get_camera_frame()
-#             if frame is None:
-#                 break
-#             yield (b'--frame\r\n'
-#                    b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-
                    
                    
 def generate():
@@ -179,15 +170,6 @@ def generate():
                    b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
     finally:
         detector.stop_camera_capture()
-
-# def generate_frames():
-#     with current_app.app_context():
-#         while detector.is_processing:
-#             frame = detector.get_frame()
-#             if frame is None:
-#                 break
-#             yield (b'--frame\r\n'
-#                    b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
                    
 def generate_frames():
