@@ -1,3 +1,5 @@
+# routes.py
+
 from flask import render_template, Response, jsonify, request, send_from_directory, current_app
 # from flask import render_template, Response, jsonify, request
 from app.detection import bp
@@ -129,8 +131,65 @@ def camera_feed():
 
 # ... (include all other routes from the original app.py)
 
+@bp.route('/update_config', methods=['POST'])
+def update_config():
+    data = request.json
+    detector.update_config(data)
+    valid_keys = ['FRAME_SKIP', 'RESIZE_WIDTH', 'RESIZE_HEIGHT', 'CONFIDENCE_THRESHOLD', 'MAX_DETECTIONS_PER_FRAME', 'PROCESS_EVERY_N_SECONDS']
+    
+    for key, value in data.items():
+        if key in valid_keys:
+            current_app.config[key] = value
+    
+    return jsonify({"message": "Configuration updated successfully"})
 
 
+@bp.route('/get_config')
+def get_config():
+    config = {
+        'FRAME_SKIP': current_app.config['FRAME_SKIP'],
+        'RESIZE_WIDTH': current_app.config['RESIZE_WIDTH'],
+        'RESIZE_HEIGHT': current_app.config['RESIZE_HEIGHT'],
+        'CONFIDENCE_THRESHOLD': current_app.config['CONFIDENCE_THRESHOLD'],
+        'MAX_DETECTIONS_PER_FRAME': current_app.config['MAX_DETECTIONS_PER_FRAME'],
+        'PROCESS_EVERY_N_SECONDS': current_app.config['PROCESS_EVERY_N_SECONDS']
+    }
+    return jsonify(config)
+
+
+
+# def generate():
+#     with current_app.app_context():
+#         while detector.is_processing:
+#             frame = detector.get_camera_frame()
+#             if frame is None:
+#                 break
+#             yield (b'--frame\r\n'
+#                    b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+
+                   
+                   
+def generate():
+    try:
+        while detector.is_processing:
+            frame = detector.get_camera_frame()
+            if frame is None:
+                break
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+    finally:
+        detector.stop_camera_capture()
+
+# def generate_frames():
+#     with current_app.app_context():
+#         while detector.is_processing:
+#             frame = detector.get_frame()
+#             if frame is None:
+#                 break
+#             yield (b'--frame\r\n'
+#                    b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+
+                   
 def generate_frames():
     try:
         while detector.is_processing:
