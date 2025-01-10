@@ -114,6 +114,30 @@
     </div>
 
 
+    <div id="db-info"></div>
+    
+    <script>
+        function fetchDBInfo() {
+            fetch('/db_info')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('db-info').innerHTML = `
+                    <h3>Database Info</h3>
+                    <p>URL: ${data.url}</p>
+                    <p>Organization: ${data.org}</p>
+                    <p>Bucket: ${data.bucket}</p>
+                `;
+                })
+                .catch(error => console.error('Error:', error));
+        }
+
+        // Call this function when the page loads
+        fetchDBInfo();
+    </script>
+
+
+
+
 
 
     <!-- <script> -->

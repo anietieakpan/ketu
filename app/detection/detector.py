@@ -1,8 +1,5 @@
 # detector.py
 
-# from app.models.detection import Detection
-# from app import db
-
 import cv2
 import numpy as np
 from nomeroff_net import pipeline
@@ -16,12 +13,19 @@ import traceback
 from picamera2 import Picamera2
 from flask import current_app
 import time
+from app.database.factory import DatabaseFactory
+from datetime import datetime
+import logging
+import pytz
+
+from app.database.factory import DatabaseFactory
 
 warnings.filterwarnings('ignore', category=UserWarning, message='Implicit dimension choice for softmax.*')
 warnings.filterwarnings('ignore', category=UserWarning, message='Creating a tensor from a list of numpy.ndarrays is extremely slow.*')
 
 class LicensePlateDetector:
-    def __init__(self):
+    def __init__(self, database_factory):
+        logging.info("Initializing LicensePlateDetector")
         Path('output').mkdir(exist_ok=True)
         print("Loading pipeline...")
         self.detector = pipeline("number_plate_detection_and_reading", image_loader="opencv")
@@ -40,142 +44,39 @@ class LicensePlateDetector:
         self.confidence_threshold = 0.5
         self.max_detections_per_frame = 5
         self.process_every_n_seconds = 1
-
-
-    
-    # def process_frame(self, frame, frame_size=None):
-    #     try:
-    #         self.frame_count += 1
-    #         current_time = time.time()
-
-    #         if (self.frame_count % current_app.config['FRAME_SKIP'] != 0 or
-    #             current_time - self.last_process_time < current_app.config['PROCESS_EVERY_N_SECONDS']):
-    #             return frame, []
-
-    #         self.last_process_time = current_time
-
-    #         if frame_size:
-    #             frame = cv2.resize(frame, frame_size)
-    #         else:
-    #             frame = cv2.resize(frame, (current_app.config['RESIZE_WIDTH'], current_app.config['RESIZE_HEIGHT']))
-
-    #         temp_frame_path = str(self.temp_dir / "temp_frame.jpg")
-    #         cv2.imwrite(temp_frame_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-
-    #         results = self.detector([temp_frame_path])
-    #         (images, bboxs, points, zones,
-    #         region_ids, region_names,
-    #         count_lines, confidences, texts) = unzip(results)
-
-    #         visualization = frame.copy()
-    #         detections = []
-
-    #         if bboxs and len(bboxs[0]) > 0:
-    #             for i, bbox in enumerate(bboxs[0][:current_app.config['MAX_DETECTIONS_PER_FRAME']]):
-    #                 x1, y1, x2, y2 = map(int, bbox[:4])
-    #                 det_confidence = float(bbox[4])
-
-    #                 if det_confidence < current_app.config['CONFIDENCE_THRESHOLD']:
-    #                     continue
-
-    #                 cv2.rectangle(visualization, (x1, y1), (x2, y2), (0, 255, 0), 3)
-
-    #                 if texts and len(texts[0]) > i:
-    #                     text = texts[0][i]
-    #                 if isinstance(text, list):
-    #                     text = ' '.join(text)
-
-    #                 detection_info = {
-    #                     'text': text,
-    #                     'confidence': det_confidence,
-    #                     'bbox': (x1, y1, x2, y2)
-    #                 }
-    #                 detections.append(detection_info)
-
-    #                 label = f"{text} ({det_confidence:.2f})"
-    #                 text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)[0]
-    #                 cv2.rectangle(visualization,
-    #                             (x1, y1 - text_size[1] - 10),
-    #                             (x1 + text_size[0], y1),
-    #                             (0, 255, 0),
-    #                             -1)
-
-    #                 cv2.putText(visualization,
-    #                           label,
-    #                           (x1, y1 - 10),
-    #                           cv2.FONT_HERSHEY_SIMPLEX,
-    #                           1.0,
-    #                           (0, 0, 0),
-    #                           2)
-
-    #         return visualization, detections
-    #     except Exception as e:
-    #         print(f"Error in process_frame: {str(e)}")
-    #         traceback.print_exc()
-    #         return frame.copy(), []
         
+        # self.databases = getattr(current_app, 'databases', None)
+
+        self.database_factory = database_factory
+        self.databases = None
+
+        self.local_tz = pytz.timezone('Africa/Johannesburg')
         
+    def initialize_databases(self):        
+        try:
+            logging.info("Attempting to get all databases")
+            self.databases = self.database_factory.get_all_databases()
+            # self.databases = DatabaseFactory.get_all_databases()
+            logging.info(f"Databases retrieved: {list(self.databases.keys())}")
+            for db_name, db in self.databases.items():
+                try:
+                    logging.info(f"Attempting to connect to {db_name} database")
+                    db.connect()
+                    logging.info(f"Successfully connected to {db_name} database")
+                    print(f"Successfully connected to {db_name} database")
+                except Exception as db_error:
+                    # print(f"Error connecting to {db_name} database: {str(db_error)}")
+                    logging.error(f"Error connecting to {db_name} database: {str(db_error)}")
+        except Exception as e:
+            # print(f"Error initializing databases: {str(e)}")
+            logging.error(f"Error initializing databases: {str(e)}", exc_info=True)
         
-    # def process_frame(self, frame, frame_size=None):
-    #     try:
-    #         if frame_size:
-    #             frame = cv2.resize(frame, frame_size)
-        
-    #         temp_frame_path = str(self.temp_dir / "temp_frame.jpg")
-    #         cv2.imwrite(temp_frame_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        
-    #         results = self.detector([temp_frame_path])
-    #         (images, bboxs, points, zones,
-    #         region_ids, region_names,
-    #         count_lines, confidences, texts) = unzip(results)
 
-    #         visualization = frame.copy()
-    #         detections = []
+    def __del__(self):
+        if hasattr(self, 'databases') and self.databases:
+            for db in self.databases.values():
+                db.disconnect()
 
-    #         if bboxs and len(bboxs[0]) > 0:
-    #             for i, bbox in enumerate(bboxs[0]):
-    #                 x1, y1, x2, y2 = map(int, bbox[:4])
-    #                 det_confidence = float(bbox[4])
-
-    #                 cv2.rectangle(visualization, (x1, y1), (x2, y2), (0, 255, 0), 3)
-
-    #                 if texts and len(texts[0]) > i:
-    #                     text = texts[0][i]
-    #                     if isinstance(text, list):
-    #                         text = ' '.join(text)
-                    
-    #                     detection_info = {
-    #                         'text': text,
-    #                         'confidence': det_confidence,
-    #                         'bbox': (x1, y1, x2, y2)
-    #                     }
-    #                     detections.append(detection_info)
-
-    #                     label = f"{text} ({det_confidence:.2f})"
-    #                     text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)[0]
-
-    #                     cv2.rectangle(visualization,
-    #                             (x1, y1 - text_size[1] - 10),
-    #                             (x1 + text_size[0], y1),
-    #                             (0, 255, 0),
-    #                             -1)
-                    
-    #                     cv2.putText(visualization,
-    #                           label,
-    #                           (x1, y1 - 10),
-    #                           cv2.FONT_HERSHEY_SIMPLEX,
-    #                           1.0,
-    #                           (0, 0, 0),
-    #                           2)
-
-    #         return visualization, detections
-
-    #     except Exception as e:
-    #         print(f"Error in process_frame: {str(e)}")
-    #         traceback.print_exc()
-    #         return frame.copy(), []
-        
-        
     
     def process_frame(self, frame, frame_size=None):
         try:
@@ -232,15 +133,41 @@ class LicensePlateDetector:
                                 1.0,
                                 (0, 0, 0),
                                 2)
-
+                        
+            if self.databases:
+                logging.info("Inserting detections into databases")  
+                # added this for the db implementation - timezone
+                utc_time = datetime.now(pytz.UTC)
+                local_time = utc_time.astimezone(self.local_tz)
+                for detection in detections:
+                    detection_data = {
+                    'text': detection['text'],
+                    'confidence': detection['confidence'],
+                    'timestamp_utc': utc_time.isoformat(),
+                    'timestamp_local': local_time.isoformat()
+                    # 'timestamp': datetime.now(), 
+                    }
+                    for db_name, db in self.databases.items():
+                        try:
+                            db.insert_detection(detection_data)
+                            logging.info(f"Inserted detection into {db_name} database")
+                        except Exception as e:
+                            logging.error(f"Error inserting into {db_name} database: {str(e)}")
+                
+            else:
+                # print("Warning: Databases not initialized, skipping data insertion")
+                logging.warning("Databases not initialized, skipping data insertion")
+            
+            
+            
             return visualization, detections
-
+        
+        
         except Exception as e:
             print(f"Error in process_frame: {str(e)}")
             traceback.print_exc()
             return frame.copy(), []
     
-
     
     
     def process_image(self, image):
@@ -367,8 +294,6 @@ class LicensePlateDetector:
     def get_detected_plates(self):
         return self.detected_plates
     
-    
-
     def start_camera_capture(self):
         if hasattr(self, 'picam2') and self.picam2 is not None:
             print("Camera already initialized, stopping previous instance")
@@ -390,9 +315,6 @@ class LicensePlateDetector:
             self.picam2 = None
             raise
         
-        
-
-
     def get_camera_frame(self):
         if not self.is_processing:
             return None
@@ -419,9 +341,6 @@ class LicensePlateDetector:
         ret, jpeg = cv2.imencode('.jpg', processed_frame)
         return jpeg.tobytes()
 
-
-
-        
     def stop_camera_capture(self):
         if hasattr(self, 'picam2'):
             try:
