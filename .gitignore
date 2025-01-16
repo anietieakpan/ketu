@@ -141,3 +141,16 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+# working images:
+data/vehicle_images
+
+# car images
+images/
+
+# Codesum summary files
+.summary_files*/
+
+
+# uploads folder
+uploads

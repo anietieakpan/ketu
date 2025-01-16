@@ -1,26 +1,47 @@
-# routes.py
+# app/detection/routes.py
 
-from flask import render_template, Response, jsonify, request, send_from_directory, current_app
-from app.detection import bp
-from app.detection.detector import LicensePlateDetector
+from flask import render_template, Response, jsonify, request, current_app
 import cv2
 import numpy as np
-from flask import current_app
 import traceback
-from werkzeug.utils import secure_filename
 import os
 from datetime import datetime, timedelta
+import pytz
+import logging
+from werkzeug.utils import secure_filename
+from app.detection import bp
+from app.detection.detector import LicensePlateDetector
 from app.database.factory import DatabaseFactory
 
+logger = logging.getLogger(__name__)
+
 def get_detector():
+    """Get or create detector instance"""
     if 'detector' not in current_app.extensions:
         detector = LicensePlateDetector(DatabaseFactory)
         detector.initialize_databases()
         current_app.extensions['detector'] = detector
-        # current_app.extensions['detector'] = LicensePlateDetector()
     return current_app.extensions['detector']
 
-# detector = LicensePlateDetector()
+def get_db():
+    """Get database instance with error handling"""
+    try:
+        db = DatabaseFactory.get_database('postgres')
+        if db is None:
+            raise RuntimeError("Failed to get database instance")
+        return db
+    except Exception as e:
+        logger.error(f"Error getting database: {str(e)}")
+        raise
+
+@bp.errorhandler(Exception)
+def handle_error(error):
+    """Global error handler for the blueprint"""
+    logger.error(f"Error in detection routes: {str(error)}", exc_info=True)
+    return jsonify({
+        'status': 'error',
+        'message': str(error)
+    }), 500
 
 @bp.route('/')
 def index():
@@ -29,8 +50,101 @@ def index():
 @bp.route('/video_feed')
 def video_feed():
     return Response(generate_frames(current_app._get_current_object()), 
-                    mimetype='multipart/x-mixed-replace; boundary=frame')
+                   mimetype='multipart/x-mixed-replace; boundary=frame')
 
+@bp.route('/camera_feed')
+def camera_feed():
+    detector = get_detector()
+    def generate():
+        while detector.is_processing:
+            frame = detector.get_camera_frame()
+            if frame is None:
+                break
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@bp.route('/api/vehicle/makes')
+def get_vehicle_makes():
+    """Get hierarchical list of makes with their models"""
+    try:
+        db = get_db()
+        makes = db.get_vehicle_makes_and_models()
+        
+        return jsonify({
+            'status': 'success',
+            'makes': makes
+        })
+    except Exception as e:
+        logger.error(f"Error getting vehicle makes: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@bp.route('/api/vehicle/colors')
+def get_vehicle_colors():
+    """Get list of detected vehicle colors"""
+    try:
+        db = get_db()
+        colors = db.get_vehicle_colors()
+        
+        return jsonify({
+            'status': 'success',
+            'colors': colors
+        })
+    except Exception as e:
+        logger.error(f"Error getting vehicle colors: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@bp.route('/api/vehicle/search')
+def search_vehicles():
+    """Search vehicles based on criteria"""
+    try:
+        # Get search parameters
+        make = request.args.get('make')
+        model = request.args.get('model')
+        color = request.args.get('color')
+        type_ = request.args.get('type')
+        days = request.args.get('days', default=30, type=int)
+        
+        # Calculate time range
+        end_time = datetime.now(pytz.UTC)
+        start_time = end_time - timedelta(days=days)
+        
+        # Build query conditions
+        conditions = []
+        params = {'start_time': start_time, 'end_time': end_time}
+        
+        if make:
+            conditions.append("vehicle_make = :make")
+            params['make'] = make
+        if model:
+            conditions.append("vehicle_model = :model")
+            params['model'] = model
+        if color:
+            conditions.append("vehicle_color = :color")
+            params['color'] = color
+        if type_:
+            conditions.append("vehicle_type = :type")
+            params['type'] = type_
+            
+        db = get_db()
+        vehicles = db.search_vehicles(conditions, params)
+        
+        return jsonify({
+            'status': 'success',
+            'vehicles': vehicles
+        })
+    except Exception as e:
+        logger.error(f"Error searching vehicles: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 @bp.route('/upload_video', methods=['POST'])
 def upload_video():
@@ -54,7 +168,7 @@ def start_video():
         if not video_path:
             return jsonify({'error': 'No video path provided'}), 400
         
-        detector = get_detector()        
+        detector = get_detector()
         detector.start_video_capture(video_path)
         return jsonify({'success': 'Video started'})
     except Exception as e:
@@ -62,15 +176,24 @@ def start_video():
 
 @bp.route('/stop_video')
 def stop_video():
-    detector = get_detector()  
+    detector = get_detector()
     detector.stop_video_capture()
     return jsonify({'success': 'Video stopped'})
 
-@bp.route('/detected_plates')
-def detected_plates():
+@bp.route('/start_camera')
+def start_camera():
+    try:
+        detector = get_detector()
+        detector.start_camera_capture()
+        return jsonify({'success': 'Camera started'})
+    except Exception as e:
+        return jsonify({'error': f'Error starting camera: {str(e)}'}), 500
+
+@bp.route('/stop_camera')
+def stop_camera():
     detector = get_detector()
-    plates = detector.get_detected_plates()
-    return jsonify(plates)
+    detector.stop_camera_capture()
+    return jsonify({'success': 'Camera stopped'})
 
 @bp.route('/process_image', methods=['POST'])
 def process_image():
@@ -83,6 +206,7 @@ def process_image():
     
     if file:
         try:
+            # Read and process image
             image_stream = file.read()
             image_array = np.frombuffer(image_stream, np.uint8)
             image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
@@ -92,140 +216,127 @@ def process_image():
             
             detector = get_detector()
             encoded_image, detections = detector.process_image(image)
-
-            # encoded_image, detections = detector.process_image(image)
             
             if encoded_image is None:
                 return jsonify({'error': 'Error processing image'}), 500
-            
             
             return jsonify({
                 'image': encoded_image,
                 'detections': detections
             })
         except Exception as e:
-            print(f"Error processing image: {str(e)}")
-            traceback.print_exc()
+            logger.error(f"Error processing image: {str(e)}", exc_info=True)
             return jsonify({'error': f'Error processing image: {str(e)}'}), 500
-
-            
-@bp.route('/start_camera')
-def start_camera():
-    try:
-        detector = get_detector()  
-        detector.start_camera_capture()
-        return jsonify({'success': 'Camera started'})
-    except Exception as e:
-        return jsonify({'error': f'Error starting camera: {str(e)}'}), 500
-
-@bp.route('/stop_camera')
-def stop_camera():
-    detector = get_detector()  
-    detector.stop_camera_capture()
-    return jsonify({'success': 'Camera stopped'})
-
-@bp.route('/camera_feed')
-def camera_feed():
-    detector = get_detector() 
-    def generate():
-        # detector = get_detector() 
-        while detector.is_processing:
-            frame = detector.get_camera_frame()
-            if frame is None:
-                break
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
-
-
-# ... (include all other routes from the original app.py)
 
 @bp.route('/update_config', methods=['POST'])
 def update_config():
-    data = request.json
-    detector = get_detector()  
-    detector.update_config(data)
-    valid_keys = ['FRAME_SKIP', 'RESIZE_WIDTH', 'RESIZE_HEIGHT', 'CONFIDENCE_THRESHOLD', 'MAX_DETECTIONS_PER_FRAME', 'PROCESS_EVERY_N_SECONDS']
-    
-    for key, value in data.items():
-        if key in valid_keys:
-            current_app.config[key] = value
-    
-    return jsonify({"message": "Configuration updated successfully"})
-
+    try:
+        data = request.json
+        detector = get_detector()
+        detector.update_config(data)
+        
+        # Update app config
+        valid_keys = [
+            'FRAME_SKIP', 'RESIZE_WIDTH', 'RESIZE_HEIGHT',
+            'CONFIDENCE_THRESHOLD', 'MAX_DETECTIONS_PER_FRAME',
+            'PROCESS_EVERY_N_SECONDS'
+        ]
+        
+        for key, value in data.items():
+            if key in valid_keys:
+                current_app.config[key] = value
+        
+        return jsonify({"message": "Configuration updated successfully"})
+    except Exception as e:
+        logger.error(f"Error updating config: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @bp.route('/get_config')
 def get_config():
-    config = {
-        'FRAME_SKIP': current_app.config['FRAME_SKIP'],
-        'RESIZE_WIDTH': current_app.config['RESIZE_WIDTH'],
-        'RESIZE_HEIGHT': current_app.config['RESIZE_HEIGHT'],
-        'CONFIDENCE_THRESHOLD': current_app.config['CONFIDENCE_THRESHOLD'],
-        'MAX_DETECTIONS_PER_FRAME': current_app.config['MAX_DETECTIONS_PER_FRAME'],
-        'PROCESS_EVERY_N_SECONDS': current_app.config['PROCESS_EVERY_N_SECONDS']
-    }
-    return jsonify(config)
-
-
-
-@bp.route('/recent_detections')
-def recent_detections():
-    end_time = datetime.now()
-    start_time = end_time - timedelta(hours=1)  # Get detections from the last hour
-    
-    timeseries_db = DatabaseFactory.get_database('timeseries')
-    detections = timeseries_db.get_detections(start_time, end_time)
-    
-    return jsonify(detections)
-
-
-@bp.route('/test_db_insert')
-def test_db_insert():
-    timeseries_db = DatabaseFactory.get_database('timeseries')
-    timeseries_db.connect()
-    
-    test_data = {
-        'text': 'TEST123',
-        'confidence': 0.95,
-        'timestamp': datetime.now()
-    }
-    
     try:
-        timeseries_db.insert_detection(test_data)
-        return jsonify({'status': 'success', 'message': 'Test data inserted successfully'})
+        config = {
+            'FRAME_SKIP': current_app.config['FRAME_SKIP'],
+            'RESIZE_WIDTH': current_app.config['RESIZE_WIDTH'],
+            'RESIZE_HEIGHT': current_app.config['RESIZE_HEIGHT'],
+            'CONFIDENCE_THRESHOLD': current_app.config['CONFIDENCE_THRESHOLD'],
+            'MAX_DETECTIONS_PER_FRAME': current_app.config['MAX_DETECTIONS_PER_FRAME'],
+            'PROCESS_EVERY_N_SECONDS': current_app.config['PROCESS_EVERY_N_SECONDS']
+        }
+        return jsonify(config)
     except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-    finally:
-        timeseries_db.disconnect()
+        logger.error(f"Error getting config: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
         
-@bp.route('/db_info')
-def db_info():
-    timeseries_db = DatabaseFactory.get_database('timeseries')
-    info = {
-        'url': timeseries_db.url,
-        'org': timeseries_db.org,
-        'bucket': timeseries_db.bucket
-    }
-    return jsonify(info)
-                   
-                   
-def generate():
-    detector = get_detector()  
+@bp.route('/detected_plates')
+def detected_plates():
+    """Get all detected plates with vehicle details"""
     try:
-        while detector.is_processing:
-            frame = detector.get_camera_frame()
-            if frame is None:
-                break
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-    finally:
-        detector.stop_camera_capture()
+        detector = get_detector()
+        plates = detector.get_detected_plates()
+        return jsonify({'plates': plates})
+    except Exception as e:
+        logger.error(f"Error getting detected plates: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
-                   
+        
+        
+
+# Add to app/detection/routes.py
+
+@bp.route('/debug_detection')
+def debug_detection():
+    """Debug endpoint to test vehicle detection"""
+    try:
+        detector = get_detector()
+        
+        # Get frame from video or camera
+        if detector.cap and detector.is_processing:
+            ret, frame = detector.cap.read()
+            if not ret:
+                return jsonify({'error': 'Could not get frame'})
+                
+            # Run vehicle detection only
+            vehicle_detections = detector.vehicle_detector.detect_vehicles(frame)
+            
+            # Draw detections
+            debug_frame = frame.copy()
+            for det in vehicle_detections:
+                x1, y1, x2, y2 = det['bbox']
+                cv2.rectangle(debug_frame, 
+                            (x1, y1), (x2, y2),
+                            (255, 0, 0),
+                            2)
+            
+            # Save debug frame
+            cv2.imwrite('output/debug_vehicle_detection.jpg', debug_frame)
+            
+            return jsonify({
+                'message': f'Found {len(vehicle_detections)} vehicles',
+                'detections': [
+                    {
+                        'class': det['class'],
+                        'confidence': float(det['confidence']),
+                        'bbox': det['bbox']
+                    }
+                    for det in vehicle_detections
+                ]
+            })
+        else:
+            return jsonify({'error': 'No active video feed'})
+            
+    except Exception as e:
+        logger.error(f"Debug detection error: {str(e)}")
+        return jsonify({'error': str(e)})
+
+
+
+
+
+
 def generate_frames(app):
+    """Generate video frames"""
     with app.app_context():
-        # current_app.app_context():
         detector = get_detector()
         try:
             while detector.is_processing:
@@ -236,19 +347,3 @@ def generate_frames(app):
                        b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
         finally:
             detector.stop_video_capture()
-
-            
-# def generate_frames():
-#     detector = get_detector()
-#     try:
-#         while detector.is_processing:
-#             frame = detector.get_frame()
-#             if frame is None:
-#                 break
-#             yield (b'--frame\r\n'
-#                    b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-#     finally:
-#         detector.stop_video_capture()
-
-
-

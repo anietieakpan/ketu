@@ -1,83 +1,186 @@
 # app/database/timeseries_db.py
 
-from flask import current_app
-from .base import DatabaseInterface
+import logging
+from datetime import datetime
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
-from datetime import datetime
+from .base import DatabaseInterface
+
+logger = logging.getLogger(__name__)
 
 class TimeSeriesDB(DatabaseInterface):
-    def __init__(self, url=None, token=None, org=None, bucket=None):
+    def __init__(self, url, token, org, bucket):
         self.url = url
         self.token = token
         self.org = org
         self.bucket = bucket
         self.client = None
         self.write_api = None
-        
-        # self.url = current_app.config['INFLUXDB_URL']
-        # self.token = current_app.config['INFLUXDB_TOKEN']
-        # self.org = current_app.config['INFLUXDB_ORG']
-        # self.bucket = current_app.config['INFLUXDB_BUCKET']
 
     def connect(self):
-        if not all([self.url, self.token, self.org, self.bucket]):
-            self.url = current_app.config['INFLUXDB_URL']
-            self.token = current_app.config['INFLUXDB_TOKEN']
-            self.org = current_app.config['INFLUXDB_ORG']
-            self.bucket = current_app.config['INFLUXDB_BUCKET']
-            
-        self.client = InfluxDBClient(
-            url=self.url,
-            token=self.token,
-            org=self.org
+        """Connect to InfluxDB"""
+        try:
+            self.client = InfluxDBClient(
+                url=self.url,
+                token=self.token,
+                org=self.org
             )
-        self.write_api = self.client.write_api(write_options=SYNCHRONOUS)
+            self.write_api = self.client.write_api(write_options=SYNCHRONOUS)
+            logger.info("Successfully connected to InfluxDB")
+        except Exception as e:
+            logger.error(f"Failed to connect to InfluxDB: {str(e)}")
+            raise
 
     def disconnect(self):
-        if self.client:
-            self.client.close()
+        """Disconnect from InfluxDB"""
+        try:
+            if self.client:
+                self.client.close()
+                self.client = None
+                self.write_api = None
+            logger.info("Disconnected from InfluxDB")
+        except Exception as e:
+            logger.error(f"Error disconnecting from InfluxDB: {str(e)}")
 
     def insert_detection(self, detection_data):
+        """Insert detection data into InfluxDB"""
         try:
-            point = Point("license_plate_detection") \
-                .tag("plate", detection_data['text']) \
-                .field("confidence", detection_data['confidence']) \
-                .field("timestamp_local", detection_data['timestamp_local']) \
-                .time(detection_data['timestamp_utc'])
-            self.write_api.write(bucket=self.bucket, record=point)
-            print(f"Data inserted into InfluxDB: {detection_data}")
-        except Exception as e:
-            print(f"Error inserting data into InfluxDB: {str(e)}")    
+            if not self.client or not self.write_api:
+                self.connect()
 
-    def get_detections(self, start_time, end_time):
-        query = f'''
-        from(bucket:"{self.bucket}")
-        |> range(start: {start_time.isoformat()}, stop: {end_time.isoformat()})
-        |> filter(fn: (r) => r._measurement == "license_plate_detection")
-        '''
-        result = self.client.query_api().query(query, org=self.org)
-        
-        detections = []
-        for table in result:
-            for record in table.records:
-                detections.append({
-                    'plate': record.values.get('plate'),
-                    'confidence': record.values.get('confidence'),
-                    'timestamp_utc': record.get_time(),
-                    'timestamp_local': record.values.get('timestamp_local')
-                    # 'timestamp': record.values.get('_time')
-                })
-        return detections
-    
+            # Create point
+            point = Point("license_plate_detection")
+            
+            # Add fields
+            point.field("plate_text", str(detection_data['text']))
+            point.field("confidence", float(detection_data['confidence']))
+            
+            # Handle timestamp
+            if isinstance(detection_data.get('timestamp_utc'), datetime):
+                point.time(detection_data['timestamp_utc'])
+            
+            # Add vehicle details if available
+            vehicle_details = detection_data.get('vehicle_details', {})
+            if vehicle_details:
+                for key in ['make', 'model', 'color', 'type']:
+                    if vehicle_details.get(key):
+                        point.field(f"vehicle_{key}", str(vehicle_details[key]))
+                if vehicle_details.get('year'):
+                    point.field("vehicle_year", int(vehicle_details['year']))
+
+            # Write point
+            self.write_api.write(
+                bucket=self.bucket,
+                org=self.org,
+                record=point
+            )
+            
+            logger.debug(f"Successfully inserted detection: {detection_data['text']}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error inserting data into InfluxDB: {str(e)}")
+            return False
+
     def update_detection(self, detection_id, update_data):
-        # InfluxDB doesn't support updates in the same way as relational databases
-        # For time-series data, we typically insert a new point instead of updating
-        print("Warning: update_detection not implemented for TimeSeriesDB")
-        pass
+        """
+        Update is not supported in InfluxDB as it's an append-only time series database.
+        Instead, we insert a new point with updated values.
+        """
+        try:
+            if not self.client or not self.write_api:
+                self.connect()
+
+            # Create new point with updated data
+            point = Point("license_plate_detection")
+            point.field("detection_id", str(detection_id))
+            
+            for key, value in update_data.items():
+                if isinstance(value, (int, float)):
+                    point.field(key, value)
+                else:
+                    point.field(key, str(value))
+
+            point.time(datetime.utcnow())
+            
+            # Write point
+            self.write_api.write(
+                bucket=self.bucket,
+                org=self.org,
+                record=point
+            )
+            
+            logger.debug(f"Successfully added update point for detection: {detection_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating detection in InfluxDB: {str(e)}")
+            return False
 
     def delete_detection(self, detection_id):
-        # InfluxDB doesn't support deletes in the same way as relational databases
-        # For time-series data, we typically use retention policies instead of deleting
-        print("Warning: delete_detection not implemented for TimeSeriesDB")
-        pass
+        """
+        Delete is not directly supported in InfluxDB.
+        We can mark records as deleted by writing a delete marker.
+        """
+        try:
+            if not self.client or not self.write_api:
+                self.connect()
+
+            # Create delete marker point
+            point = Point("license_plate_detection")
+            point.field("detection_id", str(detection_id))
+            point.field("deleted", True)
+            point.time(datetime.utcnow())
+            
+            # Write delete marker
+            self.write_api.write(
+                bucket=self.bucket,
+                org=self.org,
+                record=point
+            )
+            
+            logger.debug(f"Successfully marked detection as deleted: {detection_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error marking detection as deleted in InfluxDB: {str(e)}")
+            return False
+
+    def get_detections(self, start_time, end_time):
+        """Get detections from InfluxDB within time range"""
+        try:
+            if not self.client:
+                self.connect()
+
+            query = f'''
+                from(bucket:"{self.bucket}")
+                |> range(start: {start_time.isoformat()}, stop: {end_time.isoformat()})
+                |> filter(fn: (r) => r["_measurement"] == "license_plate_detection")
+                |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+                |> filter(fn: (r) => r["deleted"] != true)
+            '''
+
+            results = []
+            query_api = self.client.query_api()
+            tables = query_api.query(query, org=self.org)
+            
+            for table in tables:
+                for record in table.records:
+                    results.append({
+                        'text': record.values.get('plate_text', ''),
+                        'confidence': float(record.values.get('confidence', 0.0)),
+                        'timestamp_utc': record.get_time(),
+                        'vehicle_details': {
+                            'make': record.values.get('vehicle_make'),
+                            'model': record.values.get('vehicle_model'),
+                            'color': record.values.get('vehicle_color'),
+                            'type': record.values.get('vehicle_type'),
+                            'year': record.values.get('vehicle_year')
+                        }
+                    })
+
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error querying InfluxDB: {str(e)}")
+            return []

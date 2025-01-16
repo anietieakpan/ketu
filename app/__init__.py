@@ -1,62 +1,85 @@
+# app/__init__.py
+
 from flask import Flask
 from config import Config
 import os
 from influxdb_client import InfluxDBClient
 import logging
-from app.database.factory import DatabaseFactory
+from app.database import DatabaseFactory
 
-def test_influxdb_connection():
-    client = InfluxDBClient(
-        url=Config.INFLUXDB_URL,
-        token=Config.INFLUXDB_TOKEN,
-        org=Config.INFLUXDB_ORG
-    )
-    try:
-        health = client.health()
-        if health.status == "pass":
-            print("Successfully connected to InfluxDB")
-        else:
-            print("Failed to connect to InfluxDB")
-    except Exception as e:
-        print(f"Error connecting to InfluxDB: {e}")
-    finally:
-        client.close()
+import signal
+
+def handle_broken_pipe(signum, frame):
+    """Handle broken pipe errors gracefully"""
+    sys.stderr.close()
+
+# def create_app(config_class=Config):
+#     # Add at the start of create_app function
+#     signal.signal(signal.SIGPIPE, handle_broken_pipe)
+    
+
+logger = logging.getLogger(__name__)
+
+def test_database_connections(app):
+    """Test both database connections"""
+    with app.app_context():
+        # Test InfluxDB
+        client = InfluxDBClient(
+            url=Config.INFLUXDB_URL,
+            token=Config.INFLUXDB_TOKEN,
+            org=Config.INFLUXDB_ORG
+        )
+        try:
+            health = client.health()
+            if health.status == "pass":
+                logger.info("Successfully connected to InfluxDB")
+            else:
+                logger.warning("Failed to connect to InfluxDB")
+        except Exception as e:
+            logger.error(f"Error connecting to InfluxDB: {e}")
+        finally:
+            client.close()
+
+        # Test PostgreSQL
+        try:
+            postgres = DatabaseFactory.get_database('postgres')
+            postgres.disconnect()
+            logger.info("Successfully connected to PostgreSQL")
+        except Exception as e:
+            logger.error(f"Error connecting to PostgreSQL: {e}")
 
 def create_app(config_class=Config):
-    app = Flask(__name__)
+    """Create and configure the Flask application"""
+    signal.signal(signal.SIGPIPE, handle_broken_pipe)
+    app = Flask(__name__, static_url_path='/static', static_folder='static')
     app.config.from_object(config_class)
     
+    # Configure logging
     logging.basicConfig(level=logging.INFO)
     
+    # Ensure required directories exist
+    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+    os.makedirs(app.static_folder + '/js', exist_ok=True)
+    os.makedirs(app.static_folder + '/css', exist_ok=True)
+
+    # Initialize databases within application context
     with app.app_context():
         try:
-            logging.info("Iniitializing databases")
+            logger.info("Initializing databases")
             databases = DatabaseFactory.get_all_databases()
             if databases:
-                logging.info("Databases initialized successfully")
+                logger.info("Databases initialized successfully")
                 app.databases = databases
             else:
-                logging.warning("Failed to initialize databases")
+                logger.warning("Failed to initialize databases")
         except Exception as e:
-            logging.error(f"Error during database initialization: {str(e)}", exc_info=True)
-            
-            
+            logger.error(f"Error during database initialization: {str(e)}", exc_info=True)
 
-    # Ensure the upload folder exists
-    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-
-    if not all([app.config.get('INFLUXDB_URL'), 
-                app.config.get('INFLUXDB_TOKEN'),
-                app.config.get('INFLUXDB_ORG'),
-                app.config.get('INFLUXDB_BUCKET')]):
-        print("Warning: InfluxDB configuration is incomplete")
-
+    # Register blueprints
     from app.detection import bp as detection_bp
     app.register_blueprint(detection_bp)
-    
-    # test influxdb connection
-    test_influxdb_connection()
+
+    # Test database connections
+    test_database_connections(app)
 
     return app
-
-    
