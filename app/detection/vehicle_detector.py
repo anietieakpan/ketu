@@ -9,6 +9,7 @@ import torch
 
 logger = logging.getLogger(__name__)
 
+
 class VehicleObjectDetector:
     """Handles vehicle object detection using YOLOv8"""
     

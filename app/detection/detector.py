@@ -17,11 +17,15 @@ import logging
 import pytz
 from datetime import datetime
 from .vehicle_classifier import VehicleClassifier
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 
 from app.database.factory import DatabaseFactory
 
 from .vehicle_detector import VehicleObjectDetector
+
+from app.recognition import VehicleRecognizerFactory, RecognitionType
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +91,13 @@ class LicensePlateDetector:
         if self.database_factory:
             self.initialize_databases()
             
+        # Initialize vehicle recognizer (using basic by default)
+        self.vehicle_recognizer = VehicleRecognizerFactory.create_recognizer(
+            RecognitionType.PRETRAINED
+        )
+        
+        logger.info(f"Using {self.vehicle_recognizer.__class__.__name__} for vehicle recognition")
+            
             
         logger.info("LicensePlateDetector initialization complete")
         
@@ -116,6 +127,8 @@ class LicensePlateDetector:
                 db.disconnect()
                 
                 
+ 
+
     def _prepare_detection_data(self, detection, vehicle_details):
         """Prepare detection data for database storage"""
         utc_time = datetime.now(pytz.UTC)
@@ -147,15 +160,28 @@ class LicensePlateDetector:
         influx_data['timestamp_local'] = local_time.isoformat()
         
         return base_data, influx_data
+    
+    
+        
+        # Add vehicle details if available
+        if vehicle_details:
+            base_data.update({
+                'vehicle_make': vehicle_details.get('make'),
+                'vehicle_model': vehicle_details.get('model'),
+                'vehicle_color': vehicle_details.get('color'),
+                'vehicle_type': vehicle_details.get('type'),
+                'vehicle_year': vehicle_details.get('year'),
+                'vehicle_image_path': vehicle_details.get('image_path'),
+                'vehicle_confidence_scores': vehicle_details.get('confidence_scores')
+            })
+        
+        # Create InfluxDB-specific version (with ISO format timestamps)
+        influx_data = base_data.copy()
+        influx_data['timestamp_utc'] = utc_time.isoformat()
+        influx_data['timestamp_local'] = local_time.isoformat()
+        
+        return base_data, influx_data
                 
-    
-    
-    
-    
-    
-    
-    
-    
     
     def process_frame(self, frame, frame_size=None):
         """Process frame for both vehicles and license plates"""
@@ -235,7 +261,7 @@ class LicensePlateDetector:
                     if texts and len(texts[0]) > i:
                         plate_text = texts[0][i]
                         if isinstance(plate_text, list):
-                            plate_text = ' '.join(plate_text)
+                            plate_text = ' '.join(text)
 
                     # Find associated vehicle
                     associated_vehicle = None
@@ -253,8 +279,7 @@ class LicensePlateDetector:
                     if associated_vehicle:
                         vehicle_crop = associated_vehicle['image']
                         if vehicle_crop is not None and vehicle_crop.size > 0:
-                            vehicle_details = self.vehicle_classifier.process_vehicle_image(
-                                vehicle_crop, (x1-vx1, y1-vy1, x2-vx1, y2-vy1))
+                            vehicle_details = self._get_vehicle_details(vehicle_crop, (x1-vx1, y1-vy1, x2-vx1, y2-vy1))
 
                     # Draw green box for license plate
                     cv2.rectangle(visualization, 
@@ -298,15 +323,10 @@ class LicensePlateDetector:
                     all_detections.append(detection_info)
 
                     # Store if new
-                    if not any(existing.get('text', '') == plate_text 
-                            for existing in self.detected_plates):
-                        self.detected_plates.append(detection_info)
+                    if self.databases:
+                        self._store_detection(detection_info, vehicle_details)
 
-            # Save debug frame
-            if visualization is not None and visualization.size > 0:
-                debug_path = 'output/last_processed_frame.jpg'
-                cv2.imwrite(debug_path, visualization)
-                logger.info(f"Saved debug frame to {debug_path}")
+            
 
             return visualization, all_detections
 
@@ -344,7 +364,6 @@ class LicensePlateDetector:
             return None
     
 
-    
         
     def process_image(self, image):
         """Process a single image for both vehicles and license plates"""
@@ -435,8 +454,7 @@ class LicensePlateDetector:
                     if associated_vehicle:
                         vehicle_crop = associated_vehicle['image']
                         if vehicle_crop is not None and vehicle_crop.size > 0:
-                            vehicle_details = self.vehicle_classifier.process_vehicle_image(
-                                vehicle_crop, (x1-vx1, y1-vy1, x2-vx1, y2-vy1))
+                            vehicle_details = self._get_vehicle_details(vehicle_crop, (x1-vx1, y1-vy1, x2-vx1, y2-vy1))
 
                     # Draw green box for license plate
                     cv2.rectangle(visualization, 
@@ -553,40 +571,33 @@ class LicensePlateDetector:
             
             y_offset -= text_size[1] + 10
 
-    def _store_detection(self, detection: Dict):
-        """Store detection with vehicle details in databases"""
+    def _store_detection(self, detection, vehicle_details=None):
+        """Store detection in all configured databases"""
+        if not self.databases:
+            return
+
         try:
-            utc_time = datetime.now(pytz.UTC)
-            local_time = utc_time.astimezone(self.local_tz)
-            
-            detection_data = {
-                'text': detection['text'],
-                'confidence': detection['confidence'],
-                'timestamp_utc': utc_time,
-                'timestamp_local': local_time
-            }
-            
-            # Add vehicle details if available
-            if 'vehicle_details' in detection:
-                vd = detection['vehicle_details']
-                detection_data.update({
-                    'vehicle_make': vd.get('make'),
-                    'vehicle_model': vd.get('model'),
-                    'vehicle_color': vd.get('color'),
-                    'vehicle_type': vd.get('type'),
-                    'vehicle_year': vd.get('year'),
-                    'vehicle_image_path': vd.get('image_path'),
-                    'vehicle_confidence_scores': vd.get('confidence_scores')
-                })
-            
-            # Store in databases
+            # Prepare data for different databases
+            postgres_data, influx_data = self._prepare_detection_data(detection, vehicle_details)
+
+            # Store in InfluxDB
             if 'timeseries' in self.databases:
-                self.databases['timeseries'].insert_detection(detection_data)
+                try:
+                    self.databases['timeseries'].insert_detection(influx_data)
+                    logging.info("Successfully inserted detection into timeseries database")
+                except Exception as e:
+                    logging.error(f"Error storing in InfluxDB: {str(e)}")
+
+            # Store in PostgreSQL
             if 'postgres' in self.databases:
-                self.databases['postgres'].insert_detection(detection_data)
-                
+                try:
+                    self.databases['postgres'].insert_detection(postgres_data)
+                    logging.info("Successfully inserted detection into postgres database")
+                except Exception as e:
+                    logging.error(f"Error storing in PostgreSQL: {str(e)}")
+
         except Exception as e:
-            logger.error(f"Error storing detection: {str(e)}")
+            logging.error(f"Error in _store_detection: {str(e)}") 
             
             
     def start_video_capture(self, video_path):
@@ -676,6 +687,43 @@ class LicensePlateDetector:
         self.picam2 = None  # Ensure the picam2 attribute is cleared
         
         
+        
+        
+    def _get_vehicle_details(self, vehicle_crop: np.ndarray, plate_bbox: Tuple[int, int, int, int]) -> Dict[str, Any]:
+        """Get vehicle details using the pre-trained recognizer"""
+        try:
+            if vehicle_crop is None or vehicle_crop.size == 0:
+                logger.warning("Invalid vehicle crop provided")
+                return None
+
+            # Convert relative plate bbox to vehicle crop coordinates
+            x1, y1, x2, y2 = plate_bbox
+            vehicle_height, vehicle_width = vehicle_crop.shape[:2]
+            
+            # Expanded bbox for better vehicle recognition
+            expanded_bbox = self._expand_bbox(
+                vehicle_crop,
+                (x1, y1, x2, y2)
+            )
+            
+            # Get attributes using pre-trained recognizer
+            attributes = self.vehicle_recognizer.recognize(vehicle_crop, expanded_bbox)
+            
+            return {
+                'make': attributes.make,
+                'model': attributes.model,
+                'color': attributes.color,
+                'year': attributes.year,
+                'type': attributes.type,
+                'image_path': attributes.image_path,
+                'confidence_scores': attributes.confidence_scores
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting vehicle details: {str(e)}")
+            return None
+        
+        
     def update_config(self, config):
         if 'FRAME_SKIP' in config:
             self.frame_skip = config['FRAME_SKIP']
@@ -689,4 +737,7 @@ class LicensePlateDetector:
             self.max_detections_per_frame = config['MAX_DETECTIONS_PER_FRAME']
         if 'PROCESS_EVERY_N_SECONDS' in config:
             self.process_every_n_seconds = config['PROCESS_EVERY_N_SECONDS']
+
+            
+    
     

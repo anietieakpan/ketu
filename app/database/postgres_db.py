@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 class PostgresDB(DatabaseInterface):
     def __init__(self, dbname, user, password, host, port):
+        super().__init__()  # Add this line
         self.dbname = dbname
         self.user = user
         self.password = password
@@ -18,6 +19,19 @@ class PostgresDB(DatabaseInterface):
         self.port = port
         self.conn = None
         self.cursor = None
+        self._connected = False  # Add this line
+
+        
+    def is_connected(self) -> bool:
+        """Check if connection is active"""
+        if not self.conn or self.conn.closed:
+            return False
+        try:
+            # Try a simple query to test connection
+            self.cursor.execute("SELECT 1")
+            return True
+        except Exception:
+            return False
 
     def connect(self):
         """Establish connection to PostgreSQL"""
@@ -84,6 +98,56 @@ class PostgresDB(DatabaseInterface):
                 self.conn.rollback()
             logger.error(f"Error inserting detection: {str(e)}")
             raise
+        
+        
+    def _insert_detection_impl(self, detection_data: Dict[str, Any]) -> None:
+        """Insert detection with vehicle details into PostgreSQL"""
+        try:
+            query = """
+                INSERT INTO analysis.vehicle_detections 
+                (plate_text, confidence, timestamp_utc, timestamp_local,
+                vehicle_make, vehicle_model, vehicle_color, vehicle_year,
+                vehicle_type, vehicle_image_path, vehicle_confidence_scores,
+                camera_id, location, metadata)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id;
+            """
+            
+            # Extract vehicle details if they exist
+            vehicle_details = detection_data.get('vehicle_details', {})
+            
+            values = (
+                detection_data['text'],
+                detection_data['confidence'],
+                detection_data['timestamp_utc'],
+                detection_data['timestamp_local'],
+                vehicle_details.get('make'),
+                vehicle_details.get('model'),
+                vehicle_details.get('color'),
+                vehicle_details.get('year'),
+                vehicle_details.get('type'),
+                vehicle_details.get('image_path'),
+                Json(vehicle_details.get('confidence_scores')) if vehicle_details.get('confidence_scores') else None,
+                detection_data.get('camera_id'),
+                Json(detection_data.get('location')) if detection_data.get('location') else None,
+                Json(detection_data.get('metadata')) if detection_data.get('metadata') else None
+            )
+            
+            self.cursor.execute(query, values)
+            inserted_id = self.cursor.fetchone()[0]
+            self.conn.commit()
+            
+            logger.debug(f"Inserted detection with ID {inserted_id}")
+            return inserted_id
+                
+        except Exception as e:
+            if self.conn and not self.conn.closed:
+                self.conn.rollback()
+            logger.error(f"Error inserting detection: {str(e)}")
+            raise
+        
+        
+        
 
     def get_detections(self, start_time: datetime, end_time: datetime, 
                       include_vehicle_details: bool = True) -> List[Dict[str, Any]]:

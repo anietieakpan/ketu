@@ -64,23 +64,23 @@ def camera_feed():
                    b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-@bp.route('/api/vehicle/makes')
-def get_vehicle_makes():
-    """Get hierarchical list of makes with their models"""
-    try:
-        db = get_db()
-        makes = db.get_vehicle_makes_and_models()
+# @bp.route('/api/vehicle/makes')
+# def get_vehicle_makes():
+#     """Get hierarchical list of makes with their models"""
+#     try:
+#         db = get_db()
+#         makes = db.get_vehicle_makes_and_models()
         
-        return jsonify({
-            'status': 'success',
-            'makes': makes
-        })
-    except Exception as e:
-        logger.error(f"Error getting vehicle makes: {str(e)}")
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
+#         return jsonify({
+#             'status': 'success',
+#             'makes': makes
+#         })
+#     except Exception as e:
+#         logger.error(f"Error getting vehicle makes: {str(e)}")
+#         return jsonify({
+#             'status': 'error',
+#             'message': str(e)
+#         }), 500
 
 @bp.route('/api/vehicle/colors')
 def get_vehicle_colors():
@@ -329,6 +329,143 @@ def debug_detection():
         logger.error(f"Debug detection error: {str(e)}")
         return jsonify({'error': str(e)})
 
+
+# @bp.route('/db_info', methods=['GET'])
+# def get_db_info():
+#     """Get database statistics and information"""
+#     try:
+#         db = DatabaseFactory.get_database('postgres')
+        
+#         # Get statistics from database
+#         vehicle_stats = db.get_vehicle_statistics()
+#         makes_models = db.get_vehicle_makes_and_models()
+        
+#         return jsonify({
+#             'statistics': vehicle_stats,
+#             'makes_and_models': makes_models
+#         })
+#     except Exception as e:
+#         logger.error(f"Error getting database info: {str(e)}")
+#         return jsonify({'error': str(e)}), 500
+
+        
+@bp.route('/db_info', methods=['GET'])
+def get_db_info():
+    """Get database statistics and information"""
+    try:
+        # First check if databases are initialized
+        if not hasattr(current_app, 'databases'):
+            logger.warning("No databases initialized on app")
+            return jsonify({
+                'status': 'warning',
+                'message': 'Database connection not initialized',
+                'statistics': {},
+                'makes_and_models': {}
+            })
+        
+        db = current_app.databases.get('postgres')
+        if not db:
+            logger.warning("PostgreSQL database not found")
+            return jsonify({
+                'status': 'warning',
+                'message': 'PostgreSQL database not available',
+                'statistics': {},
+                'makes_and_models': {}
+            })
+        
+        try:
+            # Get statistics
+            vehicle_stats = db.get_vehicle_statistics()
+        except Exception as e:
+            logger.error(f"Error getting vehicle statistics: {str(e)}")
+            vehicle_stats = {}
+            
+        try:
+            # Get makes and models
+            makes_models = db.get_vehicle_makes_and_models()
+        except Exception as e:
+            logger.error(f"Error getting makes and models: {str(e)}")
+            makes_models = {}
+        
+        return jsonify({
+            'status': 'success',
+            'statistics': vehicle_stats,
+            'makes_and_models': makes_models
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in get_db_info: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e),
+            'statistics': {},
+            'makes_and_models': {}
+        }), 500
+
+
+
+
+
+# @bp.route('/vehicle/makes', methods=['GET'])
+# def get_vehicle_makes():
+#     """Get list of vehicle makes and models"""
+#     try:
+#         db = DatabaseFactory.get_database('postgres')
+#         makes_and_models = db.get_vehicle_makes_and_models()
+#         return jsonify(makes_and_models)
+#     except Exception as e:
+#         logger.error(f"Error getting vehicle makes: {str(e)}")
+#         return jsonify({'error': str(e)}), 500
+
+
+
+
+@bp.route('/vehicle/makes', methods=['GET'])
+def get_vehicle_makes():
+    """Get list of vehicle makes and models"""
+    try:
+        # Check if we have our mapping file
+        model_dir = Path('app/models/vehicle')
+        mapping_file = model_dir / 'vehicle_mappings.json'
+        
+        if mapping_file.exists():
+            with open(mapping_file, 'r') as f:
+                mappings = json.load(f)
+                return jsonify({
+                    'status': 'success',
+                    'data': mappings
+                })
+        else:
+            # Return default mappings
+            default_mappings = {
+                'makes': {
+                    "0": "BMW",
+                    "1": "Mercedes-Benz",
+                    "2": "Audi",
+                    "3": "Toyota",
+                    "4": "Honda"
+                },
+                'models': {
+                    "BMW": {
+                        "0": "3 Series",
+                        "1": "5 Series",
+                        "2": "7 Series"
+                    }
+                }
+            }
+            return jsonify({
+                'status': 'warning',
+                'message': 'Using default mappings',
+                'data': default_mappings
+            })
+            
+    except Exception as e:
+        logger.error(f"Error getting vehicle makes: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e),
+            'data': {}
+        }), 500
 
 
 

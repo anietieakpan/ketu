@@ -66,20 +66,52 @@ def create_app(config_class=Config):
     with app.app_context():
         try:
             logger.info("Initializing databases")
-            databases = DatabaseFactory.get_all_databases()
-            if databases:
-                logger.info("Databases initialized successfully")
-                app.databases = databases
+            app.databases = DatabaseFactory.get_all_databases()
+
+            
+            # connect to database
+            if app.databases:
+                for db_name, db in app.databases.items():
+                    db.connect()
+                logger.info("All databases connected successfully")
             else:
                 logger.warning("Failed to initialize databases")
         except Exception as e:
             logger.error(f"Error during database initialization: {str(e)}", exc_info=True)
+
+
+            
+    # Add these new functions for database connection management
+    @app.before_request
+    def ensure_db_connections():
+        """Ensure database connections are active before each request"""
+        if hasattr(app, 'databases'):
+            for db_name, db in app.databases.items():
+                if not db.is_connected:
+                    try:
+                        db.connect()
+                        logger.debug(f"Reconnected to {db_name} database")
+                    except Exception as e:
+                        logger.error(f"Error reconnecting to {db_name}: {str(e)}")
+
+    # @app.teardown_appcontext
+    # def cleanup_databases(exception=None):
+    #     """Clean up database connections properly when the app context ends"""
+    #     if hasattr(app, 'databases'):
+    #         for db_name, db in app.databases.items():
+    #             if db.is_connected:
+    #                 try:
+    #                     db.disconnect()
+    #                     logger.debug(f"Disconnected from {db_name} database")
+    #                 except Exception as e:
+    #                     logger.error(f"Error disconnecting from {db_name}: {str(e)}")
+
 
     # Register blueprints
     from app.detection import bp as detection_bp
     app.register_blueprint(detection_bp)
 
     # Test database connections
-    test_database_connections(app)
+    # test_database_connections(app)
 
     return app

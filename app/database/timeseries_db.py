@@ -5,17 +5,33 @@ from datetime import datetime
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 from .base import DatabaseInterface
+from typing import Dict, Any  # Added this import
 
 logger = logging.getLogger(__name__)
 
 class TimeSeriesDB(DatabaseInterface):
     def __init__(self, url, token, org, bucket):
+        super().__init__()
         self.url = url
         self.token = token
         self.org = org
         self.bucket = bucket
         self.client = None
         self.write_api = None
+        self._connected = False  # Add this line
+        
+        
+    def is_connected(self) -> bool:
+        """Check if connection is active"""
+        if not self.client:
+            return False
+        try:
+            # Try to ping the server
+            self.client.ping()
+            return True
+        except Exception:
+            return False
+    
 
     def connect(self):
         """Connect to InfluxDB"""
@@ -81,6 +97,45 @@ class TimeSeriesDB(DatabaseInterface):
         except Exception as e:
             logger.error(f"Error inserting data into InfluxDB: {str(e)}")
             return False
+
+            
+            
+    def _insert_detection_impl(self, detection_data: Dict[str, Any]) -> None:
+        """Insert detection data into InfluxDB"""
+        try:
+            # Create point
+            point = Point("license_plate_detection")
+            
+            # Add fields
+            point.field("plate_text", str(detection_data['text']))
+            point.field("confidence", float(detection_data['confidence']))
+            
+            # Handle timestamp
+            if isinstance(detection_data.get('timestamp_utc'), datetime):
+                point.time(detection_data['timestamp_utc'])
+            
+            # Add vehicle details if available
+            vehicle_details = detection_data.get('vehicle_details', {})
+            if vehicle_details:
+                for key in ['make', 'model', 'color', 'type']:
+                    if vehicle_details.get(key):
+                        point.field(f"vehicle_{key}", str(vehicle_details[key]))
+                if vehicle_details.get('year'):
+                    point.field("vehicle_year", int(vehicle_details['year']))
+
+            # Write point
+            self.write_api.write(
+                bucket=self.bucket,
+                org=self.org,
+                record=point
+            )
+            
+            logger.debug(f"Successfully inserted detection: {detection_data['text']}")
+            
+        except Exception as e:
+            logger.error(f"Error inserting data into InfluxDB: {str(e)}")
+            raise
+            
 
     def update_detection(self, detection_id, update_data):
         """
